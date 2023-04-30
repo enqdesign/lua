@@ -199,7 +199,7 @@ local elemence = {} do
 			__plist = add.__plist and not (self.type == "label" or self.type == "button" or self.type == "hotkey"),
 
 			overridden = false, original = self.value, donotsave = add.__plist or false,
-			callbacks = { [0] = add.__callback }, depend = { [0] = {ref}, {}, {} },
+			callbacks = { [0] = add.__callback }, depend = {[0] = {ref}, {}, {}},
 		}
 
 		registry[ref].self = setmetatable(self, methods_mt.element)
