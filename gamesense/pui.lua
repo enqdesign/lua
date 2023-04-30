@@ -651,7 +651,7 @@ do
 						methods_mt.element.invoke(proxy.self)
 					end
 				else
-					if not proxy.__list or (proxy.__list and table.qfind(proxy.__list, value)) then
+					if etype == "combobox" and (not proxy.__list or (proxy.__list and table.qfind(proxy.__list, value))) then
 						ui.set(ref, value)
 					end
 				end
