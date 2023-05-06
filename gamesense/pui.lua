@@ -1,12 +1,10 @@
 
 
-
 -- perfect user interface • gamesense
 ----- enQ#1349
 
 
-
---------------------------------------------------------------------------------
+-------------------------------------------------------------------------
 -- #region: < Header >
 
 
@@ -182,6 +180,14 @@ local elemence = {} do
 			return { ui.get(this.ref) }
 		else
 			registry[this.ref].callbacks[0] = function (self) this.value = ui.get(self.ref) end
+			if this.type == "multiselect" then
+				this.value = ui.get(this.ref)
+				registry[this.ref].callbacks[1] = function (self)
+					registry[this.ref].options = {}
+					for i = 1, #self.value do registry[this.ref].options[ self.value[i] ] = true end
+				end
+				registry[this.ref].callbacks[1](this)
+			end
 			return ui.get(this.ref)
 		end
 	end
@@ -199,7 +205,7 @@ local elemence = {} do
 			__plist = add.__plist and not (self.type == "label" or self.type == "button" or self.type == "hotkey"),
 
 			overridden = false, original = self.value, donotsave = add.__plist or false,
-			callbacks = { [0] = add.__callback }, depend = {[0] = {ref}, {}, {}},
+			callbacks = { [0] = add.__callback }, depend = { [0] = {ref}, {}, {} },
 		}
 
 		registry[ref].self = setmetatable(self, methods_mt.element)
@@ -517,12 +523,11 @@ end
 --
 
 
--- #endregion ------------------------------------------------------------------
+-- #endregion -----------------------------------------------------------
 --
 
 
-
---------------------------------------------------------------------------------
+-------------------------------------------------------------------------
 -- #region: < pui >
 
 
@@ -531,7 +536,10 @@ end
 
 --#region: variables
 
-pui.macros = {}
+pui.macros = setmetatable({}, {
+	__newindex = function (self, key, value) rawset(self, tostring(key), value) end,
+	__index = function (self, key) return rawget(self, tostring(key)) end
+})
 
 pui.accent, pui.menu_open = nil, ui.is_menu_open() do
 	local reference = ui.reference("MISC", "Settings", "Menu color")
@@ -661,21 +669,20 @@ do
 		end)
 	end
 
-
 	--
-	local config_mt = {
-		__type = "pui::config", __metatable = false,
-		save = function (self, ...) return save(self[0], ...) end,
-		load = function (self, ...) load(self[0], ...) end,
+	local package_mt = {
+		__type = "pui::package", __metatable = false,
 		__call = function (self, raw, ...)
 			return (type(raw) == "table" and load or save)(self[0], raw, ...)
 		end,
-	}	config_mt.__index = config_mt
+		save = function (self, ...) return save(self[0], ...) end,
+		load = function (self, ...) load(self[0], ...) end,
+	}	package_mt.__index = package_mt
 
 	pui.setup = function (t)
-		local config = { [0] = {} }
-		pui.traverse(t, function (r, p) elemence.memorize(r, p, config[0]) end)
-		return setmetatable(config, config_mt)
+		local package = { [0] = {} }
+		pui.traverse(t, function (r, p) elemence.memorize(r, p, package[0]) end)
+		return setmetatable(package, package_mt)
 	end
 end
 
@@ -720,23 +727,27 @@ methods_mt.element = {
 				registry[v[1].ref].callbacks[#registry[v[1].ref].callbacks+1] = check
 			end
 		end
+
+		return self
 	end,
 
 	override = function (self, value)
+		local is_hk = self.type == "hotkey"
+
 		local ctx = registry[self.ref]
 		local wctx = ragebot.context[ragebot.ref.value]
 
 		if value ~= nil then
 			if not ctx.overridden then
-				if ctx.__rage then wctx[self.ref] = self.value
-				else ctx.original = self.value end
-			end
-			ctx.overridden = true
-			ui.set(self.ref, value)
+				if is_hk then self.value = { ui.get(self.ref) } end
+				if ctx.__rage then wctx[self.ref] = self.value else ctx.original = self.value end
+			end ctx.overridden = true
+			if is_hk then ui.set(self.ref, value[1], value[2]) else ui.set(self.ref, value) end
 		else
 			if ctx.overridden then
 				local original = ctx.original if ctx.__rage then original = wctx[self.ref] end
-				ui.set(self.ref, original)
+				if is_hk then ui.set(self.ref, elements.hotkey.enum[original[2]], original[3] or 0)
+				else ui.set(self.ref, original) end
 				ctx.overridden = false
 			end
 		end
@@ -763,7 +774,7 @@ methods_mt.element = {
 	end,
 	get = function (self, value)
 		if value and self.type == "multiselect" then
-			return table.qfind(ui.get(self.ref), value) ~= nil
+			return registry[self.ref].options[value] or false
 		end
 		return ui.get(self.ref)
 	end,
@@ -873,9 +884,7 @@ ragebot = {
 		ragebot.ref.value = ui.get(self)
 
 		if not silent and previous ~= ragebot.ref.value then
-			for i = 1, #registry[self].callbacks, 1 do
-				registry[self].callbacks[i](ragebot.ref)
-			end
+			for i = 1, #registry[self].callbacks, 1 do registry[self].callbacks[i](ragebot.ref) end
 			client.fire_event("adaptive_weapon", ragebot.ref.value, previous)
 		end
 
@@ -1060,10 +1069,8 @@ end
 --
 
 
--- #endregion ------------------------------------------------------------------
+-- #endregion -----------------------------------------------------------
 --
 
 
-
---
 return setmetatable(pui, pui_mt)
