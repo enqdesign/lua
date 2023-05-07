@@ -136,7 +136,9 @@ local registry, ragebot, players = {}, {}, {} do
 		end
 		ragebot.cycle(function (active)
 			for k, v in pairs(ragebot.context[active]) do
-				if v ~= nil and registry[k].overridden then ui.set(k, v) end
+				if v ~= nil and registry[k].overridden then
+					ui.set(k, v)
+				end
 			end
 		end, true)
 	end)
@@ -169,6 +171,7 @@ local elemence = {} do
 		if this.name == "Weapon type" and string.lower(registry[this.ref].tab) == "rage" then return ui.get(this.ref) end
 
 		ui.set_callback(this.ref, function (self)
+			if registry[self].__rage and ragebot.silent then return end
 			for i = 0, #registry[self].callbacks, 1 do
 				if type(registry[self].callbacks[i]) == "function" then registry[self].callbacks[i](this) end
 			end
@@ -205,7 +208,7 @@ local elemence = {} do
 			__plist = add.__plist and not (self.type == "label" or self.type == "button" or self.type == "hotkey"),
 
 			overridden = false, original = self.value, donotsave = add.__plist or false,
-			callbacks = { [0] = add.__callback }, depend = { [0] = {ref}, {}, {} },
+			callbacks = { [0] = add.__callback }, events = {}, depend = { [0] = {ref}, {}, {} },
 		}
 
 		registry[ref].self = setmetatable(self, methods_mt.element)
@@ -695,16 +698,10 @@ end
 -- #region : methods
 
 methods_mt.element = {
-	__type = "pui::element", __name = "pui::element",
-
-	__metatable = false,
+	__type = "pui::element", __name = "pui::element", __metatable = false,
 	__eq = function (this, that) return this.ref == that.ref end,
 	__tostring = function (self) return string.format('pui.%s[%d] "%s"', self.type, self.ref, self.name) end,
-
-	__call = function (self, ...)
-		if #{...} > 0 then ui.set(self.ref, ...)
-		else return ui.get(self.ref) end
-	end,
+	__call = function (self, ...) if #{...} > 0 then ui.set(self.ref, ...) else return ui.get(self.ref) end end,
 
 	--
 
@@ -733,9 +730,7 @@ methods_mt.element = {
 
 	override = function (self, value)
 		local is_hk = self.type == "hotkey"
-
-		local ctx = registry[self.ref]
-		local wctx = ragebot.context[ragebot.ref.value]
+		local ctx, wctx = registry[self.ref], ragebot.context[ragebot.ref.value]
 
 		if value ~= nil then
 			if not ctx.overridden then
@@ -743,12 +738,12 @@ methods_mt.element = {
 				if ctx.__rage then wctx[self.ref] = self.value else ctx.original = self.value end
 			end ctx.overridden = true
 			if is_hk then ui.set(self.ref, value[1], value[2]) else ui.set(self.ref, value) end
+			if ctx.__rage then ctx.__ovr_v = value end
 		else
 			if ctx.overridden then
-				local original = ctx.original if ctx.__rage then original = wctx[self.ref] end
+				local original = ctx.original if ctx.__rage then original, ctx.__ovr_v = wctx[self.ref], nil end
 				if is_hk then ui.set(self.ref, elements.hotkey.enum[original[2]], original[3] or 0)
-				else ui.set(self.ref, original) end
-				ctx.overridden = false
+				else ui.set(self.ref, original) end ctx.overridden = false
 			end
 		end
 	end,
@@ -803,7 +798,7 @@ methods_mt.element = {
 		if registry[self.ref].__addon then methods_mt.element.set(self.color, ...) end
 	end,
 
-	is_reference = function (self) return registry[self.ref].__ref and true or false end,
+	is_reference = function (self) return registry[self.ref].__ref or false end,
 	get_type = function (self) return self.type end,
 	get_name = function (self) return self.name end,
 
@@ -821,10 +816,31 @@ methods_mt.element = {
 		registry[self.ref].callbacks[#registry[self.ref].callbacks+1] = func
 	end,
 	detach_callback = function (self, func)
+		print(tostring(self), " requires the coder to change :detach_callback() to :unset_callback(). Tell him!")
+		table.remove(registry[self.ref].callbacks, table.qfind(registry[self.ref].callbacks, func) or 0)
+	end,
+	unset_callback = function (self, func)
 		table.remove(registry[self.ref].callbacks, table.qfind(registry[self.ref].callbacks, func) or 0)
 	end,
 	invoke = function (self, ...)
 		for i = 0, #registry[self.ref].callbacks do registry[self.ref].callbacks[i](self, ...) end
+	end,
+
+	set_event = function (self, event, func, condition)
+		if condition == nil then condition = true end
+		local is_cond_fn, latest = type(condition) == "function", nil
+		registry[self.ref].events[func] = function (this)
+			local permission if is_cond_fn then permission = condition(this) else permission = this.value == condition end
+
+			local action = permission and client.set_event_callback or client.unset_event_callback
+			if latest ~= permission then action(event, func) latest = permission end
+		end
+		registry[self.ref].events[func](self)
+		registry[self.ref].callbacks[#registry[self.ref].callbacks+1] = registry[self.ref].events[func]
+	end,
+	unset_event = function (self, event, func)
+		client.unset_event_callback(event, func)
+		methods_mt.element.unset_callback(self, registry[self.ref].events[func])
 	end,
 
 	get_location = function (self) return registry[self.ref].tab, registry[self.ref].container end,
@@ -863,29 +879,34 @@ end
 
 ragebot = {
 	ref = pui.reference("RAGE", "Weapon type", "Weapon type"),
-	context = {}, cache = {}
+	context = {}, silent = false
 } do
-	local previous, silent = ragebot.ref.value, false
-	for i, v in ipairs(weapons) do ragebot.context[v], ragebot.cache[v] = {}, {} end
+	local previous, cycle_action = ragebot.ref.value, nil
+	for i, v in ipairs(weapons) do ragebot.context[v] = {} end
+
+	local neutral = ui.reference("RAGE", "Aimbot", "Enabled")
+	ui.set_callback(neutral, function ()
+		if not ragebot.silent then client.delay_call(0, client.fire_event, "adaptive_weapon", ragebot.ref.value, previous) end
+		if cycle_action then cycle_action(ragebot.ref.value) end
+	end)
 
 	ragebot.cycle = function (fn, mute)
-		silent = mute and true or false
+		cycle_action = mute and fn or nil
+		ragebot.silent = mute and true or false
 
 		for i, v in ipairs(weapons) do
 			ragebot.ref:override(v)
-			fn(ragebot.ref.value)
 		end
 
 		ragebot.ref:override()
-		silent = false
+		cycle_action, ragebot.silent = nil, false
 	end
 
 	ui.set_callback(ragebot.ref.ref, function (self)
 		ragebot.ref.value = ui.get(self)
 
-		if not silent and previous ~= ragebot.ref.value then
+		if not ragebot.silent and previous ~= ragebot.ref.value then
 			for i = 1, #registry[self].callbacks, 1 do registry[self].callbacks[i](ragebot.ref) end
-			client.fire_event("adaptive_weapon", ragebot.ref.value, previous)
 		end
 
 		previous = ragebot.ref.value
@@ -894,8 +915,16 @@ ragebot = {
 	ragebot.memorize = function (self)
 		local ctx = ragebot.context[ragebot.ref.value]
 
-		if registry[self.ref].overridden and ctx[self.ref] == nil then
-			ctx[self.ref] = self.value
+		if registry[self.ref].overridden then
+			if ctx[self.ref] == nil then
+				ctx[self.ref] = self.value
+				methods_mt.element.override(self, registry[self.ref].__ovr_v)
+			end
+		else
+			if ctx[self.ref] then
+				methods_mt.element.set(self, ctx[self.ref])
+				ctx[self.ref] = nil
+			end
 		end
 	end
 end
