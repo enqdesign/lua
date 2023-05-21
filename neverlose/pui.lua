@@ -6,10 +6,8 @@
 
 
 
-----<  Header  >----------------------------------------------------------------
-
 --------------------------------------------------------------------------------
--- #region: < Header >
+-- #region :: Header
 
 
 --
@@ -17,20 +15,9 @@
 
 --#region: localization
 
-local assert, collectgarbage, error, getfenv, setfenv, getmetatable, setmetatable,
-ipairs, pairs, load, next, pcall, rawequal, rawset, rawlen, require, select,
-tonumber, tostring, type, unpack, xpcall, print, print_raw, print_error =
-assert, collectgarbage, error, getfenv, setfenv, getmetatable, setmetatable,
-ipairs, pairs, load, next, pcall, rawequal, rawset, rawlen, require, select,
-tonumber, tostring, type, unpack, xpcall, print, print_raw, print_error
+local C = function (t) local c = {} for k, v in next, t do c[k] = v end return c end
 
-local function C (o)
-	if type(o) ~= "table" then return o end
-	local res = {} for k, v in pairs(o) do res[C(k)] = C(v) end return res
-end
-
-local table, math, string = C(table), C(math), C(string)
-local ui, render, common, utils = C(ui), C(render), C(common), C(utils)
+local table, math, string, ui = C(table), C(math), C(string), C(ui)
 
 --#endregion
 
@@ -44,7 +31,7 @@ table.filter = function (t)  local res = {} for i = 1, table.maxn(t) do if t[i] 
 table.append = function (t, ...)  for i, v in ipairs{...} do table.insert(t, v) end  end
 table.appendf = function (t, ...)  local arg = {...} for i = 1, table.maxn(arg) do local v = arg[i] if v ~= nil then t[#t+1] = v end end  end
 table.range = function (t, i, j)  local r = {} for l = i or 0, j or #t do r[#r+1] = t[l] end return r  end
-table.copy = C
+table.copy = function (o) if type(o) ~= "table" then return o end local r = {} for k, v in pairs(o) do r[table.copy(k)] = table.copy(v) end return r end
 
 math.round = function (value)  return math.floor (value + 0.5)  end
 math.lerp = function (a, b, w)  return a + (b - a) * w  end
@@ -149,6 +136,7 @@ local elements = {
     input					= { type = "string",	arg = 2 },
     textbox					= { type = "string",	arg = 2 },
     color_picker			= { type = "userdata",	arg = 2 },
+    value					= { type = "any",		arg = 2 },
 	["sol.Lua::LuaVarClr"]	= { type = "userdata",	arg = 2 },
 }
 
@@ -158,7 +146,8 @@ local elements = {
 
 local __mt = {
 	group = {}, wrp_group = {},
-	element = {}, wrp_element = {}
+	element = {}, wrp_element = {},
+	events = {}
 } do
 	local element = ui.find("Miscellaneous", "Main", "Movement", "Air Duck")
     local group = element:parent()
@@ -179,11 +168,12 @@ end
 --#region: weak tables
 
 local icons = setmetatable({}, {
-    -- __mode = "k",
+    __mode = "k",
     __index = function (self, name)
         local icon = ui.get_icon(name)
 		if #icon == 0 then
 			debug.warning(icon, ("<%s> icon not found"):format(name))
+			return "[?]"
 		end
         self[name] = icon
         return self[name]
@@ -267,28 +257,20 @@ do
 	}
 
 	local format = function (s)
-		s = string.gsub(s, "[\v\r]", { ["\v"] = "\a".. pui.accent:to_hex(), ["\r"] = "\aDEFAULT" })
-		s = string.gsub(s, "([\b%x]-)%[(.-)%]", fmethods.gradients)
-		s = string.gsub(s, "\a%[(.-)%]", fmethods.colors)
-		s = string.gsub(s, "\f<(.-)>", icons)
+
 
 		return s
 	end
 
-	tools.format = function (object, localize)
-		local kind = type(object)
-
-		if kind == "string" then
-			object = format(object)
-
-		--[[ elseif localize and kind == "table" and type(object[1]) == "string" then
-			local original = format(object[1])
-			for k, v in next, object do
-				if k ~= 1 then ui.localize(k, original, format(v)) end
-			end	object = original ]]
+	tools.format = function (s)
+		if type(s) == "string" then
+			s = string.gsub(s, "[\v\r]", { ["\v"] = "\a".. pui.accent:to_hex(), ["\r"] = "\aDEFAULT" })
+			s = string.gsub(s, "([\b%x]-)%[(.-)%]", fmethods.gradients)
+			s = string.gsub(s, "\a%[(.-)%]", fmethods.colors)
+			s = string.gsub(s, "\f<(.-)>", icons)
 		end
 
-		return object
+		return s
 	end
 
 	--#endregion
@@ -300,30 +282,40 @@ end
 
 do
 	elemence.new = function (ref)
-		local this = {
-			ref = ref
-		}
+		local this = { ref = ref }
 		--
 
 		this.__depend = { {}, {} }
 		this[0], this[1] = {
-			type = __mt.element.type(this.ref)
+			type = __mt.element.type(this.ref),
+			events = {}, callbacks = {},
 		}, {}
 		this[0].savable = not elements[this[0].type].unsavable == true
 		--
 
-		this.value = __mt.element.get(this.ref)
 		if this[0].type ~= "button" then
-			__mt.element.set_callback(this.ref, function (self)
-				this.value = __mt.element.get(self)
-			end)
+			local v1, v2 = __mt.element.get(this.ref)
+			if v2 ~= nil then
+				this.value = { v1, v2 }
+				__mt.element.set_callback(this.ref, function (self)
+					this.value = { __mt.element.get(self) }
+				end)
+			else
+				this.value = v1
+				__mt.element.set_callback(this.ref, function (self)
+					this.value = __mt.element.get(self)
+				end)
+			end
 		end
 
 		return setmetatable(this, methods_mt.element)
 	end
 
 	elemence.group = function (ref)
-		return setmetatable({ ref = ref, __depend = { {}, {} } }, methods_mt.group)
+		return setmetatable({
+			ref = ref, par = ref:parent(),
+			__depend = { {}, {} }
+		}, methods_mt.group)
 	end
 
 	elemence.dispense = function (key, ...)
@@ -356,12 +348,12 @@ do
 		return args
 	end
 
-	elemence.memorize = function (self, path)
-		if type(self) ~= "table" or self.__name ~= "pui::element" then return end
+	elemence.memorize = function (self, path, location)
+		if type(self) ~= "table" or self.__name ~= "pui::element" or self[0].skipsave then return end
 
 		if next(self[1]) == nil and rawget(self, "color") == nil then
 			if self[0].savable then
-				dirs.pave(config, self.ref, path)
+				dirs.pave(location or config, self.ref, path)
 			end
 		else
 			local object = {}
@@ -378,41 +370,38 @@ do
 				end
 			end
 
-			dirs.pave(config, object, path)
+			dirs.pave(location or config, object, path)
 		end
 	end
 
 	elemence.features = function (self, args)
 		if self[0].type == "image" or self[0].type == "value" then return end
 
-		local had_tooltip = false
+		local had_child, had_tooltip = false, false
 
 		for i = 1, table.maxn(args) do
 			local v = args[i]
 			local t = type(v)
 
-			if t == "function" and not self[0].gear then
+			if not had_child and t == "function" then
 				local condition
 				self[0].gear = methods_mt.element.create(self)
 				self[1], condition = v(self[0].gear, self)
 				if condition ~= nil then
-					for name, element in pairs(self[1]) do
-						element:depend({self, condition})
-					end
+					self[0].gear:depend({self, condition})
 				end
+				had_child = true
 
-			elseif not rawget(self, "color") and (t == "userdata" and v.__name == "sol.ImColor") or (t == "table" and v[1].__name == "sol.ImColor") then
+			elseif not had_child and (t == "userdata" and v.__name == "sol.ImColor") or (t == "table" and (v[1] and v[1].__name == "sol.ImColor" or v[next(v)] and v[next(v)][1].__name == "sol.ImColor")) then
 				local g = t == "table" and v[1] or v
 				methods_mt.element.color_picker(self, g)
-
-				if t == "table" then
-					methods_mt.element.depend(self.color, {self, v[2]})
-				end
+				if v[2] ~= nil then self.color:depend({self, v[2]}) end
 
 			elseif not had_tooltip and t == "string" or (t == "table" and type(v[1]) == "string") then
-				
 				__mt.element.tooltip(self.ref, tools.format(v))
 				had_tooltip = true
+			elseif i == 2 and v == false then
+				self[0].skipsave = true
 			end
 		end
 	end
@@ -479,7 +468,6 @@ do
 	--#endregion
 end
 
-
 --#endregion
 
 -- #endregion
@@ -491,13 +479,8 @@ end
 
 
 
-
-
-
-----<  Header  >----------------------------------------------------------------
-
 --------------------------------------------------------------------------------
--- #region: < PUI >
+-- #region :: PUI
 
 
 --
@@ -505,10 +488,10 @@ end
 
 --#region: variables
 
-pui.__name = "pui::basement"
-pui.accent = ui.get_style("Link Active")
 pui.colors = {}
+pui.accent = ui.get_style("Link Active")
 pui.alpha = ui.get_alpha()
+
 events.render:set(function ()
 	pui.accent = ui.get_style("Link Active")
 	pui.alpha = ui.get_alpha()
@@ -521,7 +504,15 @@ end)
 pui.string = tools.format
 
 pui.create = function (tab, name, align)
-	return elemence.group( groups[name and {tab, name, align} or tab] )
+	if type(name) == "table" then
+		local collection = {}
+		for k, v in ipairs(name) do
+			collection[ v[1] or k ] = elemence.group( groups[{tab, v[2], v[3]}] )
+		end
+		return collection
+	else
+		return elemence.group( groups[name and {tab, name, align} or tab] )
+	end
 end
 
 pui.find = function (...)
@@ -610,87 +601,109 @@ end
 
 --#region: config system
 
-pui.setup = function (t)
-    if is_setup then return debug.warning("config is already setup by this or another script") end
-	pui.traverse(t, elemence.memorize)
-    is_setup = true
-	return t
-end
+do
+	local save = function (location, ...)
+		local packed = {}
+		pui.traverse(dirs.extract(location, {...}), function (ref, path)
+			local etype = __mt.element.type(ref)
+			local value, value2 = __mt.element[etype == "hotkey" and "key" or "get"](ref)
+			local vtype, v2type = type(value), type(value2)
 
-pui.save = function (...)
-    if not is_setup then return debug.warning("pui.setup was not called, config not saved") end
-	local packed = {}
-	pui.traverse(dirs.extract(config, {...}), function (ref, path)
-        local etype = __mt.element.type(ref)
-		local value, value2 = __mt.element[etype == "hotkey" and "key" or "get"](ref)
-		local vtype, v2type = type(value), type(value2)
-
-		if etype == "color_picker" then
-			if vtype == "table" then
-				value2, v2type = value, vtype
-				value, vtype = __mt.element.list(ref)[1], "string"
-			end
-
-			if value2 then
-				value = { value }
-				if v2type == "table" then
-					for i = 1, #value2 do
-						value[#value+1] = "#".. value2[i]:to_hex()
-					end
-				else
-					value[2] = "#".. value2:to_hex()
+			if etype == "color_picker" then
+				if vtype == "table" then
+					value2, v2type = value, vtype
+					value, vtype = __mt.element.list(ref)[1], "string"
 				end
-				value[#value+1] = "~"
-			else
-				value = "#".. value:to_hex()
-			end
-		elseif vtype == "table" then
-			value[#value+1] = "~"
-		end
 
-		dirs.pave(packed, value, path)
-	end)
-	return packed
-end
-
-pui.load = function (raw, ...)
-    if not is_setup then return debug.warning("pui.setup was not called, config not loaded") end
-    if not raw then return end
-
-	local packed = dirs.extract(raw, {...})
-	pui.traverse(dirs.extract(config, {...}), function (ref, path)
-		local value = dirs.find(packed, path)
-
-		local multicolor
-		local vtype, etype = type(value), __mt.element.type(ref)
-		local object = elements[etype] or elements[ref.__name]
-
-		if etype == "color_picker" then
-			if vtype == "string" and value:sub(1, 1) == "#" then
-				value = color(value)
-				vtype = "userdata"
+				if value2 then
+					value = { value }
+					if v2type == "table" then
+						for i = 1, #value2 do
+							value[#value+1] = "#".. value2[i]:to_hex()
+						end
+					else
+						value[2] = "#".. value2:to_hex()
+					end
+					value[#value+1] = "~"
+				else
+					value = "#".. value:to_hex()
+				end
 			elseif vtype == "table" then
-				value[#value] = nil
-				for i = 2, #value do value[i] = color(value[i]) end
-				multicolor = true
-				vtype = "userdata"
+				value[#value+1] = "~"
 			end
-		elseif vtype == "table" and value[#value] == "~" then
-			value[#value] = nil
-		end
 
-		-- 
-		if not object or object.type ~= vtype then return __mt.element.reset(ref) end
+			dirs.pave(packed, value, path)
+		end)
+		return packed
+	end
+	local load = function (location, data, ...)
+		if not data then return end
 
-		if etype == "hotkey" then
-			__mt.element.key(ref, value)
-		elseif etype == "color_picker" and multicolor then
-			__mt.element.set(ref, value[1])
-			__mt.element.set(ref, value[1], table.range(value, 2))
+		local arg, reset = {...}, true
+		if arg[1] == false then table.remove(arg, 1); reset = false end
+
+		local packed = dirs.extract(data, arg)
+		pui.traverse(dirs.extract(location, arg), function (ref, path)
+			local value = dirs.find(packed, path)
+
+			local multicolor
+			local vtype, etype = type(value), __mt.element.type(ref)
+			local object = elements[etype] or elements[ref.__name]
+
+			if etype == "color_picker" then
+				if vtype == "string" and value:sub(1, 1) == "#" then
+					value = color(value)
+					vtype = "userdata"
+				elseif vtype == "table" then
+					value[#value] = nil
+					for i = 2, #value do value[i] = color(value[i]) end
+					multicolor = true
+					vtype = "userdata"
+				end
+			elseif vtype == "table" and value[#value] == "~" then
+				value[#value] = nil
+			end
+
+			--
+			if not object or (object.type ~= "any" and object.type ~= vtype) then
+				return reset and __mt.element.reset(ref) or nil
+			end
+
+			if etype == "hotkey" then
+				__mt.element.key(ref, value)
+			elseif etype == "color_picker" and multicolor then
+				__mt.element.set(ref, value[1])
+				__mt.element.set(ref, value[1], table.range(value, 2))
+			else
+				__mt.element.set(ref, value)
+			end
+		end)
+	end
+
+	local package_mt = {
+		__type = "pui::package", __metatable = false,
+		__call = function (self, raw, ...)
+			return (type(raw) == "table" and load or save)(self[0], raw, ...)
+		end,
+		save = function (self, ...) return save(self[0], ...) end,
+		load = function (self, ...) load(self[0], ...) end,
+	}	package_mt.__index = package_mt
+
+	pui.setup = function (t, isolate)
+		if isolate == true then
+			local package = { [0] = {} }
+			pui.traverse(t, function (r, p) elemence.memorize(r, p, package[0]) end)
+			return setmetatable(package, package_mt)
 		else
-			__mt.element.set(ref, value)
+			if is_setup then return debug.warning("config is already setup by this or another script") end
+			pui.traverse(t, elemence.memorize)
+			is_setup = true
+			return t
 		end
-	end)
+	end
+
+	pui.save = function (...) return save(config, ...) end
+	pui.load = function (...) load(config, ...) end
 end
 
 --#endregion
@@ -702,21 +715,22 @@ end
 -- #region : methods
 
 methods_mt.element = {
-	__type = "pui::element",
-	__name = "pui::element",
-	__tostring = function (self) return "pui::element.".. self[0].type .." - ".. self.name end,
+	__metatable = false,
+	__type = "pui::element", __name = "pui::element",
+	__tostring = function (self) return string.format("pui::element.%s \"%s\"", self[0].type, self.ref:name()) end,
+	__eq = function (a, b) return __mt.element.__eq(a.ref, b.ref) end,
 	__index = function (self, key)
-		return methods_mt.element[key] or __mt.wrp_element[key] or self[1][key]
+		return rawget(methods_mt.element, key) or rawget(__mt.wrp_element, key) or rawget(self[1], key)
 	end,
 	__call = function (self, ...)
-		return __mt.element[#{...} == 0 and "get" or "set"](self.ref, ...)
+		return (#{...} == 0 and __mt.element.get or __mt.element.set)(self.ref, ...)
 	end,
-	__eq = function (a, b) return __mt.element.__eq(a.ref, b.ref) end,
 
 	--
 
 	create = function (self)
-		return elemence.group(__mt.element.create(self.ref))
+		self[0].gear = self[0].gear or elemence.group(__mt.element.create(self.ref))
+		return self[0].gear
 	end,
 
 	depend = function (self, ...)
@@ -738,6 +752,8 @@ methods_mt.element = {
 				__mt.element.set_callback(v[1].ref, check)
 			end
 		end
+
+		return self
 	end,
 
 	--
@@ -768,7 +784,7 @@ methods_mt.element = {
 	end,
 
 	tooltip = function (self, t)
-		if s then	__mt.element.tooltip(self.ref, tools.format(t))
+		if t then	__mt.element.tooltip(self.ref, tools.format(t))
 		else		return __mt.element.tooltip(self.ref) end
 	end,
 	set_tooltip = function (self, t)
@@ -785,6 +801,13 @@ methods_mt.element = {
 		__mt.element.visibility(self.ref)
 	end,
 
+	set_disabled = function (self, v)
+		__mt.element.disabled(self.ref, v)
+	end,
+	get_disabled = function (self)
+		__mt.element.disabled(self.ref)
+	end,
+
 	get_color = function (self)
 		return rawget(self, "color") and self.color.value
 	end,
@@ -792,6 +815,39 @@ methods_mt.element = {
 		self.color = elemence.new(__mt.element.color_picker(self.ref, default))
 
 		return self.color
+	end,
+
+	set_event = function (self, event, fn, condition)
+		if condition == nil then condition = true end
+		local fncond, latest = type(condition) == "function", fn
+
+		self[0].events[fn] = function ()
+			local permission
+
+			if fncond then permission = condition(self) and true or false
+			else permission = self.value == condition end
+
+			if latest ~= permission then
+				events[event](fn, permission)
+				latest = permission
+			end
+		end
+		self[0].events[fn]()
+		__mt.element.set_callback(self.ref, self[0].events[fn])
+	end,
+	unset_event = function (self, event, fn)
+		events[event].unset(events[event], fn)
+		__mt.element.unset_callback(self.ref, self[0].events[fn])
+		self[0].events[fn] = nil
+	end,
+
+	set_callback = function (self, fn, once)
+		self[0].callbacks[fn] = function () fn(self) end
+		__mt.element.set_callback(self.ref, self[0].callbacks[fn], once)
+	end,
+	unset_callback = function (self, fn)
+		__mt.element.set_callback(self.ref, self[0].callbacks[fn])
+		self[0].callbacks[fn] = nil
 	end,
 
 	override = function (self, ...)
@@ -802,28 +858,41 @@ methods_mt.element = {
 	end,
 }
 
---
-
 methods_mt.group = {
-	__name = "pui::group",
+	__name = "pui::group", __metatable = false,
 	__index = function (self, key)
 		return methods_mt.group[key] or (elements[key] and pui_mt.__index(self, key) or __mt.wrp_group[key])
 	end,
 
-	name = function (self, s)
-		return __mt.group.name(self.ref, s and tools.format(s) or nil)
+	name = function (self, s, t)
+		local ref = t == true and self.par or self.ref
+		if s then	__mt.group.name(ref, tools.format(s))
+		else		return __mt.group.name(ref) end
 	end,
-	set_name = function (self, s)
-		__mt.group.name(self.ref, tools.format(s))
+	set_name = function (self, s, t)
+		__mt.group.name(t == true and self.par or self.ref, tools.format(s))
 	end,
-	get_name = function (self)
-		return __mt.group.name(self.ref)
+	get_name = function (self, t)
+		return __mt.group.name(t == true and self.par or self.ref)
+	end,
+
+	disabled = function (self, b, t)
+		local ref = t == true and self.par or self.ref
+		if b then	__mt.group.disabled(ref, b)
+		else		return __mt.group.disabled(ref) end
+	end,
+	set_disabled = function (self, b, t)
+		return __mt.group.disabled(t == true and self.par or self.ref, b and true or false)
+	end,
+	get_disabled = function (self, t)
+		return __mt.group.disabled(t == true and self.par or self.ref)
 	end,
 
 	set_visible = function (self, b)
-		for i, v in ipairs(self[1]) do
-			__mt.element.visibility(v, b)
-		end
+		return __mt.group.visibility(self.ref, b and true or false)
+	end,
+	get_visible = function (self)
+		return __mt.group.visibility(self.ref)
 	end,
 
 	depend = methods_mt.element.depend
@@ -835,19 +904,26 @@ methods_mt.group = {
 --
 -- #region : pui_mt
 
-pui_mt.__index = function (self, key)
-	if not elements[key] then return ui[key] end
+do
+	local cached = {} for key in next, elements do
+		cached[key] = function (origin, ...)
+			local is_child = origin.__name == "pui::group"
+			local group = is_child and origin.ref or groups[origin]
 
-	return function (origin, ...)
-		local is_child = self.__name == "pui::group"
-		local group = is_child and origin.ref or groups[origin]
+			local args = elemence.dispense(key, ...)
+			local this = elemence.new( __mt.group[key]( group, unpack(args, 1, args.n < args.req and args.n or args.req) ) )
 
-		local args = elemence.dispense(key, ...)
-		local this = elemence.new( __mt.group[key]( group, unpack(args, 1, args.n < args.req and args.n or args.req) ) )
+			elemence.features(this, args.misc)
 
-		elemence.features(this, args.misc)
+			return this
+		end
+	end
 
-		return this
+	pui_mt.__metatable = false
+	pui_mt.__name = "pui::basement"
+	pui_mt.__index = function (self, key)
+		if not elements[key] then return ui[key] end
+		return cached[key]
 	end
 end
 
@@ -861,6 +937,4 @@ end
 
 
 
-return setmetatable(pui, pui_mt)
-
-------------------------------------------------------------<  enQ • 2023  >----
+return setmetatable(pui, pui_mt) ---------------------------<  enQ • 1927  >----
