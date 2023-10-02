@@ -5,7 +5,7 @@
 
 
 -------------------------------------------------------------------------
--- #region: < Header >
+-- #region :: Header
 
 
 --
@@ -105,6 +105,8 @@ local pui, pui_mt, methods_mt = {}, {}, {
 
 --#region: arguments
 
+local registry, ragebot, players = {}, {}, {}
+
 local elements = {
 	button		= { type = "function",	arg = 2, unsavable = true },
 	checkbox	= { type = "boolean",	arg = 1, init = false	},
@@ -126,37 +128,64 @@ local weapons = { "Global", "G3SG1 / SCAR-20", "SSG 08", "AWP", "R8 Revolver", "
 
 --#region: registry
 
-local registry, ragebot, players = {}, {}, {} do
+local ui_mset = function (k, v)
+	if registry[k].type == "hotkey" then
+		ui.set(k, elements.hotkey.enum[ v[2] ], v[3])
+	else
+		ui.set(k, v)
+	end
+end
+
+local ui_mget = function (k)
+	if registry[k].type == "hotkey" then return { ui.get(k) } else return ui.get(k) end
+end
+
+do
 	client.set_event_callback("shutdown", function ()
 		for k, v in next, registry do
 			if v.__ref and not v.__rage then
-				if v.overridden then ui.set(k, v.original) end
-				ui.set_enabled(k, true); ui.set_visible(k, true)
+				if v.overridden then ui_mset(k, v.original) end
+				ui.set_enabled(k, true)
+				ui.set_visible(k, not v.__hidden)
 			end
 		end
 		ragebot.cycle(function (active)
 			for k, v in pairs(ragebot.context[active]) do
 				if v ~= nil and registry[k].overridden then
-					ui.set(k, v)
+					ui_mset(k, v)
 				end
 			end
 		end, true)
 	end)
 	client.set_event_callback("pre_config_save", function ()
 		for k, v in next, registry do
-			if v.__ref and not v.__rage and v.overridden then v.ovr_restore = {ui.get(k)}; ui.set(k, v.original) end
+			if v.__ref and not v.__rage and v.overridden then
+				v.ovr_restore = { ui_mget(k) }
+				ui_mset(k, v.original)
+			end
 		end
 		ragebot.cycle(function (active)
-			for k, v in pairs(ragebot.context[active]) do if registry[k].overridden then ragebot.cache[active][k] = ui.get(k); ui.set(k, v) end end
+			for k, v in pairs(ragebot.context[active]) do
+				if registry[k].overridden then
+					ragebot.cache[active][k] = { ui_mget(k) }
+					ui_mset(k, v)
+				end
+			end
 		end, true)
 	end)
 	client.set_event_callback("post_config_save", function ()
 		for k, v in next, registry do
-			if v.__ref and not v.__rage and v.overridden then ui.set(k, unpack(v.ovr_restore)); v.ovr_restore = nil end
+			if v.__ref and not v.__rage and v.overridden then
+				ui_mset(k, unpack(v.ovr_restore))
+				v.ovr_restore = nil
+			end
 		end
 		ragebot.cycle(function (active)
 			for k, v in pairs(ragebot.context[active]) do
-				if registry[k].overridden then ui.set(k, ragebot.cache[active][k]); ragebot.cache[active][k] = nil end
+				if registry[k].overridden and ragebot.cache[active][k] ~= nil then
+					ui_mset(k, unpack(ragebot.cache[active][k]))
+					ragebot.cache[active][k] = nil
+				end
 			end
 		end, true)
 	end)
@@ -204,7 +233,7 @@ local elemence = {} do
 		--
 		registry[ref] = registry[ref] or {
 			type = self.type, ref = ref, tab = add.__tab, container = add.__container,
-			__ref = add.__ref, __init = add.__init, __list = add.__list, __rage = add.__rage,
+			__ref = add.__ref, __hidden = add.__hidden, __init = add.__init, __list = add.__list, __rage = add.__rage,
 			__plist = add.__plist and not (self.type == "label" or self.type == "button" or self.type == "hotkey"),
 
 			overridden = false, original = self.value, donotsave = add.__plist or false,
@@ -287,6 +316,11 @@ local elemence = {} do
 			dirs.pave(origin, self.hotkey.ref, path)
 		end
 	end
+
+	elemence.hidden_refs = {
+		"Unlock hidden cvars", "Allow custom game events", "Faster grenade toss",
+		"sv_maxunlag", "sv_maxusrcmdprocessticks", "sv_clockcorrection_msecs", -- m4kb12jk
+	}
 
 	--#region: depend
 
@@ -531,7 +565,7 @@ end
 
 
 -------------------------------------------------------------------------
--- #region: < pui >
+-- #region :: pui
 
 
 --
@@ -544,20 +578,35 @@ pui.macros = setmetatable({}, {
 	__index = function (self, key) return rawget(self, tostring(key)) end
 })
 
-pui.accent, pui.menu_open = nil, ui.is_menu_open() do
+pui.accent, pui.menu_open = nil, ui.is_menu_open()
+
+do
 	local reference = ui.reference("MISC", "Settings", "Menu color")
 	pui.accent = utils.rgb_to_hex{ ui.get(reference) }
+	local previous = pui.accent
+
 	ui.set_callback(reference, function ()
 		local color = { ui.get(reference) }
 		pui.accent = utils.rgb_to_hex(color)
-		client.fire_event("accent_color", color)
+
+		for idx, ref in next, registry do
+			if ref.type == "label" and not ref.__ref then
+				local new, count = string.gsub(ref.self.value, previous, pui.accent)
+				if count > 0 then
+					ui.set(idx, new)
+					ref.self.value = new
+				end
+			end
+		end
+		previous = pui.accent
+		client.fire_event("pui::accent_color", color)
 	end)
 end
 
 client.set_event_callback("paint_ui", function ()
 	local state = ui.is_menu_open()
 	if state ~= pui.menu_open then
-		client.fire_event("menu_open", state)
+		client.fire_event("pui::menu_state", state)
 		pui.menu_open = state
 	end
 end)
@@ -572,13 +621,20 @@ pui.format = utils.format
 
 pui.reference = function (tab, container, name)
 	local found = { contend(ui.reference, 3, tab, container, name) }
-	local total = #found
+	local total, hidden = #found, false
+
+	-- done on purpose, don't blame me
+	if string.lower(tab) == "misc" and string.lower(container) == "settings" then
+		for i, v in ipairs(elemence.hidden_refs) do
+			if string.find(name, "^" ..v) then hidden = true break end
+		end
+	end
 
 	for i, v in ipairs(found) do
 		found[i] = elemence.new(v, {
-			__ref = true,
+			__ref = true, __hidden = hidden or nil,
 			__tab = tab, __container = container,
-			__rage = container == "Aimbot" or nil,
+			__rage = string.lower(container) == "aimbot" or nil,
 		})
 	end
 
@@ -641,34 +697,32 @@ do
 
 		local packed = dirs.extract(package, {...})
 		pui.traverse(dirs.extract(config, {...}), function (ref, path)
-			local value, proxy = dirs.find(packed, path), registry[ref]
-			local vtype, etype = type(value), proxy.type
-			local object = elements[etype]
+			pcall(function ()
+				local value, proxy = dirs.find(packed, path), registry[ref]
+				local vtype, etype = type(value), proxy.type
+				local object = elements[etype]
 
-			if vtype == "string" and value:sub(1, 1) == "#" then
-				value, vtype = { utils.hex_to_rgb(value) }, "table"
-			elseif vtype == "table" and value[#value] == "~" then
-				value[#value] = nil
-			end
+				if vtype == "string" and value:sub(1, 1) == "#" then
+					value, vtype = { utils.hex_to_rgb(value) }, "table"
+				elseif vtype == "table" and value[#value] == "~" then
+					value[#value] = nil
+				end
 
-			if etype == "hotkey" and value and type(value[1]) == "number" then
-				value[1] = elements.hotkey.enum[ value[1] ]
-			end
+				if etype == "hotkey" and value and type(value[1]) == "number" then
+					value[1] = elements.hotkey.enum[ value[1] ]
+				end
 
-			if object and object.type == vtype then
-				if vtype == "table" and etype ~= "multiselect" then
-					ui.set(ref, unpack(value))
-					if etype == "color_picker" then
-						methods_mt.element.invoke(proxy.self)
+				if object and object.type == vtype then
+					if vtype == "table" and etype ~= "multiselect" then
+						ui.set(ref, unpack(value))
+						if etype == "color_picker" then methods_mt.element.invoke(proxy.self) end
+					else
+						ui.set(ref, value)
 					end
 				else
-					ui.set(ref, value)
-					-- if etype == "combobox" and (not proxy.__list or (proxy.__list and table.qfind(proxy.__list, value))) then
-					-- end
+					if proxy.__init then ui.set(ref, proxy.__init) end
 				end
-			else
-				if proxy.__init then ui.set(ref, proxy.__init) end
-			end
+			end)
 		end)
 	end
 
@@ -729,30 +783,31 @@ methods_mt.element = {
 	end,
 
 	override = function (self, value)
-		local is_hk = self.type == "hotkey"
 		local ctx, wctx = registry[self.ref], ragebot.context[ragebot.ref.value]
 
 		if value ~= nil then
 			if not ctx.overridden then
-				if is_hk then self.value = { ui.get(self.ref) } end
+				if self.type == "hotkey" then self.value = { ui.get(self.ref) } end
 				if ctx.__rage then wctx[self.ref] = self.value else ctx.original = self.value end
 			end ctx.overridden = true
-			if is_hk then ui.set(self.ref, value[1], value[2]) else ui.set(self.ref, value) end
 			if ctx.__rage then ctx.__ovr_v = value end
+			ui_mset(self.ref, value)
 		else
 			if ctx.overridden then
 				local original = ctx.original if ctx.__rage then original, ctx.__ovr_v = wctx[self.ref], nil end
-				if is_hk then ui.set(self.ref, elements.hotkey.enum[original[2]], original[3] or 0)
-				else ui.set(self.ref, original) end ctx.overridden = false
+				ui_mset(self.ref, original)
+				ctx.overridden = false
 			end
 		end
 	end,
 	get_original = function (self)
-		if registry[self.ref].__rage then
-			if registry[self.ref].overridden then return ragebot.context[ragebot.ref.value][self.ref] else return self.value end
-		else
-			if registry[self.ref].overridden then return registry[self.ref].original else return self.value end
-		end
+		if registry[self.ref].overridden then
+			if registry[self.ref].__rage then
+				return ragebot.context[ragebot.ref.value][self.ref]
+			else
+				return registry[self.ref].original
+			end
+		else return self.value end
 	end,
 
 	--
@@ -762,7 +817,9 @@ methods_mt.element = {
 			ui.set(self.ref, unpack(utils.unpack_color(...)) )
 			methods_mt.element.invoke(self)
 		elseif self.type == "label" then
-			ui.set(self.ref, utils.format(...))
+			local t = utils.format(...)
+			ui.set(self.ref, t)
+			self.value = t
 		else
 			ui.set(self.ref, ...)
 		end
@@ -785,6 +842,9 @@ methods_mt.element = {
 	end,
 	get_list = function (self) return registry[self.ref].__list end,
 
+	is_active = function (self)
+		return self.value and ui.get(self.hotkey.ref)
+	end,
 	get_color = function (self)
 		if registry[self.ref].__addon then return ui.get(self.color.ref) end
 	end,
@@ -795,7 +855,7 @@ methods_mt.element = {
 		if registry[self.ref].__addon then return ui.get(self.hotkey.ref) end
 	end,
 	set_hotkey = function (self, ...)
-		if registry[self.ref].__addon then methods_mt.element.set(self.color, ...) end
+		if registry[self.ref].__addon then methods_mt.element.set(self.hotkey, ...) end
 	end,
 
 	is_reference = function (self) return registry[self.ref].__ref or false end,
@@ -815,10 +875,6 @@ methods_mt.element = {
 		if once == true then func(self) end
 		registry[self.ref].callbacks[#registry[self.ref].callbacks+1] = func
 	end,
-	detach_callback = function (self, func)
-		print(tostring(self), " requires the coder to change :detach_callback() to :unset_callback(). Tell him!")
-		table.remove(registry[self.ref].callbacks, table.qfind(registry[self.ref].callbacks, func) or 0)
-	end,
 	unset_callback = function (self, func)
 		table.remove(registry[self.ref].callbacks, table.qfind(registry[self.ref].callbacks, func) or 0)
 	end,
@@ -827,20 +883,22 @@ methods_mt.element = {
 	end,
 
 	set_event = function (self, event, func, condition)
+		local slot = registry[self.ref]
 		if condition == nil then condition = true end
 		local is_cond_fn, latest = type(condition) == "function", nil
-		registry[self.ref].events[func] = function (this)
+		slot.events[func] = function (this)
 			local permission if is_cond_fn then permission = condition(this) else permission = this.value == condition end
 
 			local action = permission and client.set_event_callback or client.unset_event_callback
 			if latest ~= permission then action(event, func) latest = permission end
 		end
-		registry[self.ref].events[func](self)
-		registry[self.ref].callbacks[#registry[self.ref].callbacks+1] = registry[self.ref].events[func]
+		slot.events[func](self)
+		slot.callbacks[#slot.callbacks+1] = slot.events[func]
 	end,
 	unset_event = function (self, event, func)
 		client.unset_event_callback(event, func)
 		methods_mt.element.unset_callback(self, registry[self.ref].events[func])
+		registry[self.ref].events[func] = nil
 	end,
 
 	get_location = function (self) return registry[self.ref].tab, registry[self.ref].container end,
@@ -859,18 +917,24 @@ methods_mt.group = {
 --
 -- #region : pui_mt, ragebot and plist handler
 
-pui_mt.__name = "pui::basement"
-pui_mt.__metatable = false
-pui_mt.__index = function (self, key)
-	if not elements[key] then return ui[key] end
-	if key == "string" then return elemence.string end
+do
+	local cached = {}
+	for k, v in next, elements do
+		cached[k] = function (origin, ...)
+			local args, group = utils.dispense(k, origin, ...)
+			local this = elemence.new( contend(ui["new_".. k], 3, group[1], group[2], unpack(args, 1, args.n < args.req and args.n or args.req)), args.data )
 
-	return function (origin, ...)
-		local args, group = utils.dispense(key, origin, ...)
-		local this = elemence.new( contend(ui["new_".. key], 3, group[1], group[2], unpack(args, 1, args.n < args.req and args.n or args.req)), args.data )
+			elemence.features(this, args.misc)
+			return this
+		end
+	end
 
-		elemence.features(this, args.misc)
-		return this
+	pui_mt.__name, pui_mt.__metatable = "pui::basement", false
+	pui_mt.__index = function (self, key)
+		if not elements[key] then return ui[key] end
+		if key == "string" then return elemence.string end
+
+		return cached[key]
 	end
 end
 
@@ -879,14 +943,15 @@ end
 
 ragebot = {
 	ref = pui.reference("RAGE", "Weapon type", "Weapon type"),
-	context = {}, silent = false
+	context = {}, cache = {},
+	silent = false,
 } do
 	local previous, cycle_action = ragebot.ref.value, nil
-	for i, v in ipairs(weapons) do ragebot.context[v] = {} end
+	for i, v in ipairs(weapons) do ragebot.context[v], ragebot.cache[v] = {}, {} end
 
 	local neutral = ui.reference("RAGE", "Aimbot", "Enabled")
 	ui.set_callback(neutral, function ()
-		if not ragebot.silent then client.delay_call(0, client.fire_event, "adaptive_weapon", ragebot.ref.value, previous) end
+		if not ragebot.silent then client.delay_call(0, client.fire_event, "pui::adaptive_weapon", ragebot.ref.value, previous) end
 		if cycle_action then cycle_action(ragebot.ref.value) end
 	end)
 
@@ -912,21 +977,28 @@ ragebot = {
 		previous = ragebot.ref.value
 	end)
 
-	ragebot.memorize = function (self)
+	local memorize = function (self)
 		local ctx = ragebot.context[ragebot.ref.value]
-
 		if registry[self.ref].overridden then
 			if ctx[self.ref] == nil then
 				ctx[self.ref] = self.value
-				methods_mt.element.override(self, registry[self.ref].__ovr_v)
+				ui_mset(self.ref, registry[self.ref].__ovr_v)
 			end
 		else
 			if ctx[self.ref] then
-				methods_mt.element.set(self, ctx[self.ref])
+				ui_mset(self.ref, ctx[self.ref])
 				ctx[self.ref] = nil
 			end
 		end
 	end
+
+	client.set_event_callback("pui::adaptive_weapon", function (cur, prev)
+		for k, v in next, registry do
+			if v.__rage then memorize(v.self) end
+		end
+	end)
+
+	ragebot.memorize = function (self) end
 end
 
 --#endregion
@@ -992,11 +1064,13 @@ players = {
 
 	slot = {
 		select = function (idx)
+			if not idx then return end
 			for i, v in ipairs(players.elements) do
 				methods_mt.element.set(v, v[idx].value)
 			end
 		end,
 		add = function (idx)
+			if not idx then return end
 			for i, v in ipairs(players.elements) do
 				local default = ternary(registry[v.ref].__init ~= nil, registry[v.ref].__init, v.value)
 				v[idx], players.list[idx] = setmetatable({
@@ -1005,6 +1079,7 @@ players = {
 			end
 		end,
 		remove = function (idx)
+			if not idx then return end
 			for i, v in ipairs(players.elements) do
 				v[idx], players.list[idx] = nil, nil
 			end
@@ -1050,17 +1125,17 @@ players = {
 		end
 
 		slot.select(selected)
-		client.fire_event("plist_update", selected)
+		client.fire_event("pui::plist_update", selected)
 	end
 
-	methods_mt.element.set_callback(refs.list, update, true)
 	do
 		local function once ()
 			update{}
-			client.unset_event_callback("paint_ui", once)
+			client.unset_event_callback("pre_render", once)
 		end
-		client.set_event_callback("paint_ui", once)
+		client.set_event_callback("pre_render", once)
 	end
+	methods_mt.element.set_callback(refs.list, update, true)
 	client.set_event_callback("player_connect_full", update)
 	client.set_event_callback("player_disconnect", update)
 	client.set_event_callback("player_spawned", update)
